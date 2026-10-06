@@ -105,7 +105,7 @@ describe('executeSessionTool on an MCP server tool', () => {
     });
 
     it('calls the tool through the proxy and passes its result through', async () => {
-        const result = { content: [{ type: 'text', text: 'ENG-1' }], structuredContent: { issues: ['ENG-1'] } };
+        const result = { content: [{ type: 'text' as const, text: 'ENG-1' }], structuredContent: { issues: ['ENG-1'] } };
         mcpServer((message) => response({ body: JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) }));
 
         const executed = await execute({ team: 'ENG' });
@@ -127,7 +127,7 @@ describe('executeSessionTool on an MCP server tool', () => {
     });
 
     it('reads a result sent as an event stream', async () => {
-        const result = { content: [{ type: 'text', text: 'none' }], isError: true };
+        const result = { content: [{ type: 'text' as const, text: 'none' }], isError: true };
         mcpServer((message) =>
             response({
                 body: `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: message.id, result })}\n\n`,
@@ -142,6 +142,49 @@ describe('executeSessionTool on an MCP server tool', () => {
         mcpServer((message) => response({ body: JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { content: 'nope' } }) }));
 
         expect(codeOf(await execute())).toBe('provider_error');
+    });
+
+    it('keeps the _meta the server put on its result', async () => {
+        const result = { content: [{ type: 'text' as const, text: 'ENG-1' }], _meta: { 'linear/request': 'abc' } };
+        mcpServer((message) => response({ body: JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) }));
+
+        expect((await execute()).unwrap()).toEqual(new RemoteToolResult(result));
+    });
+
+    it('reports a rejected handshake as the server failing, not the tool, and still closes the session', async () => {
+        request.mockImplementation((params: ProxyServiceRequest) => {
+            const message = params.body as { id?: number; method: string } | undefined;
+            if (params.method === 'DELETE' || !message?.id) {
+                return Promise.resolve(response({ status: 202 }));
+            }
+            return Promise.resolve(
+                response({
+                    body: JSON.stringify({ jsonrpc: '2.0', id: message.id, error: { code: -32600, message: 'Bad handshake' } }),
+                    headers: { 'mcp-session-id': 'remote-session' }
+                })
+            );
+        });
+
+        expect(codeOf(await execute())).toBe('provider_error');
+        expect(request.mock.calls.at(-1)?.[0]).toMatchObject({ method: 'DELETE', headers: { 'mcp-session-id': 'remote-session' } });
+    });
+
+    it('rejects a protocol version the client does not know', async () => {
+        request.mockImplementation((params: ProxyServiceRequest) => {
+            const message = params.body as { id?: number } | undefined;
+            return Promise.resolve(
+                message?.id
+                    ? response({ body: JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2099-01-01' } }) })
+                    : response({ status: 202 })
+            );
+        });
+
+        expect(codeOf(await execute())).toBe('provider_error');
+        expect(
+            request.mock.calls.some(
+                ([params]) => (params as ProxyServiceRequest).body && ((params as ProxyServiceRequest).body as { method?: string }).method === 'tools/call'
+            )
+        ).toBe(false);
     });
 
     it('reports a JSON-RPC error as a failed tool', async () => {

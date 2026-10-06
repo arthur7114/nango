@@ -49,12 +49,27 @@ export type RemoteMcpErrorCode = 'proxy_failed' | 'http_error' | 'invalid_respon
 export class RemoteMcpError extends Error {
     public readonly code: RemoteMcpErrorCode;
     public readonly status: number | undefined;
+    /** The JSON-RPC method the server rejected, set on an `rpc_error`. */
+    public readonly method: string | undefined;
 
-    constructor({ code, message, status, cause }: { code: RemoteMcpErrorCode; message: string; status?: number | undefined; cause?: unknown }) {
+    constructor({
+        code,
+        message,
+        status,
+        method,
+        cause
+    }: {
+        code: RemoteMcpErrorCode;
+        message: string;
+        status?: number | undefined;
+        method?: string | undefined;
+        cause?: unknown;
+    }) {
         super(message, { cause });
         this.name = 'RemoteMcpError';
         this.code = code;
         this.status = status;
+        this.method = method;
     }
 
     get proxyError(): ProxyServiceError | undefined {
@@ -193,12 +208,13 @@ export async function callRemoteTool(
         return Err(new RemoteMcpError({ code: 'invalid_response', message: `The MCP server returned an invalid result for tool '${name}'` }));
     }
 
-    const { content, isError, structuredContent } = response.value;
+    const { content, isError, structuredContent, _meta } = response.value;
 
     return Ok({
         content,
         ...(isError ? { isError } : {}),
-        ...(isPlainObject(structuredContent) ? { structuredContent } : {})
+        ...(isPlainObject(structuredContent) ? { structuredContent } : {}),
+        ...(_meta ? { _meta } : {})
     });
 }
 
@@ -241,7 +257,7 @@ async function rpc(state: SessionState, method: string, params?: Record<string, 
     }
 
     if (message.error) {
-        return Err(new RemoteMcpError({ code: 'rpc_error', message: `The MCP server rejected ${method}: ${message.error.message}` }));
+        return Err(new RemoteMcpError({ code: 'rpc_error', message: `The MCP server rejected ${method}: ${message.error.message}`, method }));
     }
 
     return Ok(message.result);

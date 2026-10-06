@@ -67,6 +67,12 @@ export function remoteMcpErrorToMcp({ error, integrationId, toolName }: { error:
                 }
             );
         case 'rpc_error':
+            if (error.method !== 'tools/call') {
+                return new PublicMcpError(
+                    `The MCP server for '${integrationId}' could not start a session: ${error.message}. Tell the user if it keeps failing.`,
+                    { code: 'provider_error', integrationId }
+                );
+            }
             return new PublicMcpError(
                 `Tool '${toolName}' on integration '${integrationId}' failed: ${error.message}. Read the failure before deciding whether to call it again with different input or to tell the user.`,
                 { code: 'tool_failed', integrationId }
