@@ -78,8 +78,7 @@ export function remoteMcpErrorToMcp({ error, integrationId, toolName }: { error:
                 { code: 'tool_failed', integrationId }
             );
         default: {
-            const exhaustiveCheck: never = code;
-            logger.error('Unexpected RemoteMcpError code while running an agent session tool', { code: exhaustiveCheck });
+            code satisfies never;
             return new InternalMcpError();
         }
     }
