@@ -1,3 +1,4 @@
+import { isCallToolResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 
 import { getProvider } from '@nangohq/shared';
@@ -6,7 +7,8 @@ import { Err, getLogger, Ok } from '@nangohq/utils';
 import { readProxyResponseBody } from './mcpProxyResponse.js';
 import proxyService from './proxy.service.js';
 
-import type { ProxyServiceResponse } from './proxy.service.js';
+import type { ProxyServiceError, ProxyServiceResponse } from './proxy.service.js';
+import type { CallToolResult } from '@modelcontextprotocol/server';
 import type { DBEnvironment, DBPlan, DBTeam, HTTP_METHOD, OperationActor } from '@nangohq/types';
 import type { Result } from '@nangohq/utils';
 
@@ -53,6 +55,10 @@ export class RemoteMcpError extends Error {
         this.name = 'RemoteMcpError';
         this.code = code;
         this.status = status;
+    }
+
+    get proxyError(): ProxyServiceError | undefined {
+        return this.code === 'proxy_failed' ? (this.cause as ProxyServiceError) : undefined;
     }
 }
 
@@ -160,6 +166,36 @@ export async function listRemoteTools(session: RemoteMcpSession, { maxTools }: {
     }
 
     return Ok(tools.slice(0, maxTools));
+}
+
+/**
+ * Runs one tool and hands back its result as the server gave it, once it is known to be a valid MCP
+ * tool result. A result with `isError` set is still a result: the tool ran and said why it failed.
+ */
+export async function callRemoteTool(
+    session: RemoteMcpSession,
+    { name, args }: { name: string; args: Record<string, unknown> }
+): Promise<Result<CallToolResult, RemoteMcpError>> {
+    const response = await session.request('tools/call', { name, arguments: args });
+    if (response.isErr()) {
+        return Err(response.error);
+    }
+
+    if (!isCallToolResult(response.value)) {
+        return Err(new RemoteMcpError({ code: 'invalid_response', message: `The MCP server returned an invalid result for tool '${name}'` }));
+    }
+
+    const { content, isError, structuredContent } = response.value;
+
+    return Ok({
+        content,
+        ...(isError ? { isError } : {}),
+        ...(isPlainObject(structuredContent) ? { structuredContent } : {})
+    });
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 async function initialize(state: SessionState): Promise<Result<void, RemoteMcpError>> {
