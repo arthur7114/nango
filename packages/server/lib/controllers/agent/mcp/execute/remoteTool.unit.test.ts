@@ -65,20 +65,28 @@ function response({ status = 200, body = '', headers = {} }: { status?: number; 
 /** Answers the handshake, then hands `onCall` every later JSON-RPC request. */
 function mcpServer(onCall: (message: { id?: number; method: string; params?: unknown }) => ReturnType<typeof response>) {
     request.mockImplementation((params: ProxyServiceRequest) => {
-        const message = params.body as { id?: number; method: string; params?: unknown } | undefined;
-        if (params.method === 'DELETE' || !message?.id) {
+        const message = bodyOf(params) as { id?: number; method: string; params?: unknown } | undefined;
+        if (params.method === 'DELETE' || message?.id === undefined) {
             return Promise.resolve(response({ status: 202 }));
         }
         if (message.method === 'initialize') {
             return Promise.resolve(
                 response({
-                    body: JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-06-18' } }),
+                    body: JSON.stringify({
+                        jsonrpc: '2.0',
+                        id: message.id,
+                        result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'linear', version: '1' } }
+                    }),
                     headers: { 'mcp-session-id': 'remote-session' }
                 })
             );
         }
         return Promise.resolve(onCall(message));
     });
+}
+
+function bodyOf(params: ProxyServiceRequest): unknown {
+    return typeof params.body === 'string' ? JSON.parse(params.body) : undefined;
 }
 
 async function execute(input?: unknown): Promise<Result<unknown>> {
@@ -113,16 +121,16 @@ describe('executeSessionTool on an MCP server tool', () => {
         expect(executed.unwrap()).toEqual(new RemoteToolResult(result));
         const call = request.mock.calls
             .map(([params]) => params as ProxyServiceRequest)
-            .find((params) => (params.body as { method?: string })?.method === 'tools/call');
+            .find((params) => (bodyOf(params) as { method?: string } | undefined)?.method === 'tools/call');
         expect(call).toMatchObject({
             endpoint: '/mcp',
             integrationId: 'linear-mcp',
             connectionId: 'linear-acme',
             headers: { 'mcp-session-id': 'remote-session' },
-            body: { method: 'tools/call', params: { name: 'list_issues', arguments: { team: 'ENG' } } },
             actor: { kind: 'session', id: 'session-1' },
             activityLogId: 'log-1'
         });
+        expect(call && bodyOf(call)).toMatchObject({ method: 'tools/call', params: { name: 'list_issues', arguments: { team: 'ENG' } } });
         expect(request.mock.calls.at(-1)?.[0]).toMatchObject({ method: 'DELETE' });
     });
 
@@ -153,8 +161,8 @@ describe('executeSessionTool on an MCP server tool', () => {
 
     it('reports a rejected handshake as the server failing, not the tool, and still closes the session', async () => {
         request.mockImplementation((params: ProxyServiceRequest) => {
-            const message = params.body as { id?: number; method: string } | undefined;
-            if (params.method === 'DELETE' || !message?.id) {
+            const message = bodyOf(params) as { id?: number; method: string } | undefined;
+            if (params.method === 'DELETE' || message?.id === undefined) {
                 return Promise.resolve(response({ status: 202 }));
             }
             return Promise.resolve(
@@ -171,9 +179,9 @@ describe('executeSessionTool on an MCP server tool', () => {
 
     it('rejects a protocol version the client does not know', async () => {
         request.mockImplementation((params: ProxyServiceRequest) => {
-            const message = params.body as { id?: number } | undefined;
+            const message = bodyOf(params) as { id?: number } | undefined;
             return Promise.resolve(
-                message?.id
+                message?.id !== undefined
                     ? response({ body: JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2099-01-01' } }) })
                     : response({ status: 202 })
             );
