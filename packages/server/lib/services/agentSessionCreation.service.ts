@@ -7,6 +7,7 @@ import { baseUrl, Err, Ok, report } from '@nangohq/utils';
 
 import * as agentSessionService from './agentSession.service.js';
 import * as agentSessionConnectionsService from './agentSessionConnections.service.js';
+import * as agentSessionMcpDiscoveryService from './agentSessionMcpDiscovery.service.js';
 import * as agentSessionToolsetService from './agentSessionToolset.service.js';
 
 import type { LogContextOrigin } from '@nangohq/logs';
@@ -25,6 +26,7 @@ import type {
     AgentSessionToolsetPolicy,
     AgentSessionToolsetSummary,
     DBEnvironment,
+    DBPlan,
     DBTeam
 } from '@nangohq/types';
 import type { Result } from '@nangohq/utils';
@@ -121,6 +123,7 @@ export class AgentSessionCreationError extends Error {
 export interface CreateAgentSessionParams {
     account: DBTeam;
     environment: DBEnvironment;
+    plan: DBPlan | null;
     connections: AgentSessionTenantConnections;
     toolset: AgentSessionToolsetPolicy | undefined;
     pinnedTools: AgentSessionPinnedTools | undefined;
@@ -198,7 +201,8 @@ export function toolsetSummary(
             {
                 connected: Object.hasOwn(resolvedConnections, integrationId),
                 tools_pinned: integration.pinned.length,
-                tools_searchable: integration.searchable.length
+                tools_searchable: integration.searchable.length,
+                ...(integration.mcpServer ? { mcp_server: integration.mcpServer } : {})
             }
         ])
     );
@@ -248,11 +252,22 @@ async function runCreation(params: CreateAgentSessionParams, logCtx: LogContextO
         return Err(rejected(resolvedConnections.error));
     }
 
+    const connectedIntegrations = Object.keys(resolvedConnections.value);
+    const mcpServers = await agentSessionMcpDiscoveryService.discoverMcpTools({
+        account,
+        environment,
+        plan: params.plan,
+        connections: agentSessionToolsetService
+            .integrationsInScope({ toolset: params.toolset, pinnedTools: params.pinnedTools, connectedIntegrations })
+            .flatMap((integrationId) => (resolvedConnections.value[integrationId] ? [resolvedConnections.value[integrationId]] : []))
+    });
+
     const compiledToolset = await agentSessionToolsetService.compileToolset({
         environmentId: environment.id,
         toolset: params.toolset,
         pinnedTools: params.pinnedTools,
-        connectedIntegrations: Object.keys(resolvedConnections.value)
+        connectedIntegrations,
+        mcpServers
     });
     if (compiledToolset.isErr()) {
         return Err(rejected(compiledToolset.error));

@@ -33,10 +33,11 @@ export const postAgentSessions = asyncWrapperWithEnvironment<PostAgentSessions>(
         return;
     }
 
-    const { account, environment } = res.locals;
+    const { account, environment, plan } = res.locals;
     const created = await agentSessionCreationService.createAgentSession({
         account,
         environment,
+        plan,
         connections: body.data.tenant.connections,
         toolset: body.data.toolset,
         pinnedTools: body.data.pinned_tools,
